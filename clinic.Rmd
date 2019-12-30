@@ -1,0 +1,281 @@
+---
+title: "Clinic"
+output:
+  html_notebook: default
+  pdf_document: default
+---
+
+Drawing samples using an empirical cumulative density function of patient arrival times relative to their scheduled appointment.
+```{r}
+ecdf <- read.csv("arrivals.csv")
+draw_sample_from_ecdf <-function(ecdf,n){
+  l<-c()
+  for (i in 1:n){
+    l<-c(l,ecdf[ecdf$Num/100 == round(runif(1),2),]$CDF)
+  }
+  return (l)
+}
+list_sample <- draw_sample_from_ecdf(ecdf,10000)
+list_sample <- list_sample/60
+write.table(list_sample, "sample.txt", append = FALSE, sep = " ", dec = ".",row.names = FALSE, col.names = FALSE)
+```
+
+Walk-in patients inter-arrival times.
+```{r}
+totsum = 0
+for(i in 1:10000){
+  # 5 patients per day, 9 hour workday 
+  totsum = totsum + sum(rexp(5,rate = 5/(60*9)))
+}
+#It should sum up to 9*60
+print(totsum/10000)
+```
+
+Appointment length - min = 15, mean = 18, and max = 30.
+```{r}
+mean(Filter(function(x) x < 30, rgamma(15000, shape = 1, scale = 3) + 15)[1:10000])
+```
+Pharmacy(~300 pharmacy walk-in pickups each day) - inter-arrival times:
+```{r}
+totsum = 0
+for(i in 1:10000){
+  # 300 walk-ins per day, 24 hour workday 
+  totsum = totsum + sum(rexp(300,rate = 300/(60*24)))
+}
+#It should sum up to 24*60
+print(totsum/10000)
+```
+Time to fill a perscription(strongly right-skewed distribution with a mean time of ~5 minutes and a maximum time of ~15 minutes):
+```{r}
+mean(Filter(function(x) x < 15, rgamma(15000, shape = 1, scale = 2) + 3)[1:10000])
+```
+Radiology(~220 walk-ins per day) - inter-arrival times:
+```{r}
+totsum = 0
+for(i in 1:10000){
+  # 300 walk-ins per day, 24 hour workday 
+  totsum = totsum + sum(rexp(300,rate = 300/(60*9)))
+}
+#It should sum up to 9*60
+print(totsum/10000)
+```
+Radiology Procedure Times
+```{r}
+radio_ecdf <- read.csv("radio.csv")
+names(radio_ecdf) = c("Num","CDF")
+list_sample <- draw_sample_from_ecdf(radio_ecdf,10000)
+list_sample <- list_sample/60
+write.table(list_sample, "sample_radio.txt", append = FALSE, sep = " ", dec = ".",row.names = FALSE, col.names = FALSE)
+```
+
+Lab(~350-400 walk-ins per day) - inter-arrival times:
+```{r}
+totsum = 0
+for(i in 1:10000){
+  # 300 walk-ins per day, 9 hour workday 
+  totsum = totsum + sum(rexp(375,rate = 375/(60*24)))
+}
+#It should sum up to 24*60
+print(totsum/10000)
+```
+Lab visit length(min = 3, mean = 7-8, max = 15)
+```{r}
+mean(Filter(function(x) x < 15, rgamma(15000, shape = 2, scale = 2.5) + 3)[1:10000])
+```
+Reading/transforming data
+```{r}
+doc_schedule <- read.csv('doc_sched.csv')
+doc_schedule$date <- as.Date(doc_schedule$slot_begin_time, format = "%m/%d")
+doc_schedule$date2 <- strptime(doc_schedule$slot_begin_time, "%m/%d/%y %H:%M")
+doc_schedule$hm <- format(doc_schedule$date2, "%H:%M")   
+```
+
+Schedules
+```{r}
+print_doc_sched<-function(doc_schedule, n){
+  doc_sched<- doc_schedule[doc_schedule$doc_id == n, ]
+  lab <- with(df, paste(format(doc_sched$date2, "%H"), format(doc_sched$date2, "%M"), sep = ":"))
+  gg <- ggplot(data = doc_sched, aes(x = date, y = hm, fill = supp_block)) +
+  geom_tile(colour = "grey50") + scale_y_discrete(breaks = lab)
+  print(gg)
+}
+#Doctor 1
+print_doc_sched(doc_schedule,1)
+```
+Actual schedules 
+```{r}
+print_doc_act_sched<-function(doc_schedule, n){
+  doc_sched<- doc_schedule[doc_schedule$doc_id == n, ]
+  lab <- with(df, paste(format(doc_sched$date2, "%H"), format(doc_sched$date2, "%M"), sep = ":"))
+  gg <- ggplot(data = doc_sched, aes(x = date, y = hm, fill = appt_block)) +
+  geom_tile(colour = "grey50") + scale_y_discrete(breaks = lab)
+  print(gg)
+}
+#Doctor 1
+print_doc_act_sched(doc_schedule,1)
+```
+
+Fill rates & no-show rates
+```{r}
+app_type <- unique(doc_schedule$appt_block)
+app_type <- app_type[app_type!='UNUSED']
+app_combos <- unique(doc_schedule$supp_block)
+unique_dates <- unique(doc_schedule$date)
+dayoftheweek <- weekdays(unique_dates)
+names(dayoftheweek) <- unique_dates
+
+fill_rate_func <-function(type){
+  return(sum(doc_schedule$supp_block == type & doc_schedule$appt_block != 'UNUSED')/sum(doc_schedule$supp_block == type))
+}
+no_show_rate_func <-function(type){
+  return(sum(doc_schedule$supp_block == type & doc_schedule$seen == 0 )/sum(doc_schedule$supp_block == type))
+}
+fill_rate <- sapply(app_combos, fill_rate_func)
+no_show_rate <- sapply(app_combos, no_show_rate_func)
+```
+
+Fill rates & no-show rates by day of week
+```{r}
+workdays <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+fill_rates_by_weekday <- vector("list", 5)
+no_show_rates_by_weekday <- vector("list", 5)
+for(i in 1:5){
+  fill_rates_by_weekday[[i]] <- matrix(NA, nrow = 21, ncol = 13)
+  no_show_rates_by_weekday[[i]] <- matrix(NA, nrow = 21, ncol = 13)
+}
+for(i in 1:5){
+  for(j in 1:21){
+    for(k in 1:13){
+    total_possible <- sum(doc_schedule$supp_block == app_combos[k] & doc_schedule$doc_id == j-1 & dayoftheweek[as.character(doc_schedule$date)]  == workdays[i] )
+    total_used <- sum(doc_schedule$supp_block == app_combos[k] & doc_schedule$appt_block != 'UNUSED' & dayoftheweek[as.character(doc_schedule$date)]  == workdays[i] & doc_schedule$doc_id == j-1)
+    total_no_show <- sum(doc_schedule$supp_block == app_combos[k] & doc_schedule$seen == 0 & dayoftheweek[as.character(doc_schedule$date)]  == workdays[i] & doc_schedule$doc_id == j-1)
+    fill_rates_by_weekday[[i]][j,k] = total_used/total_possible
+    no_show_rates_by_weekday[[i]][j,k] = total_no_show / total_possible
+    }
+  }
+}
+
+```
+
+Fill rates morning(am) shift and afternoon(pm) shift
+```{r}
+fill_rate_func_am <-function(type){
+  return(sum(doc_schedule$supp_block == type & doc_schedule$appt_block != 'UNUSED' & strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M"))/sum(doc_schedule$supp_block == type & strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M")) )
+}
+fill_rate_func_pm <-function(type){
+  return(sum(doc_schedule$supp_block == type & doc_schedule$appt_block != 'UNUSED' & strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M"))/sum(doc_schedule$supp_block == type & strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M")) )
+}
+pm_fill_rates <- sapply(app_combos, fill_rate_func_pm)
+names(pm_fill_rates) <- app_combos
+am_fill_rates <- sapply(app_combos, fill_rate_func_am)
+names(am_fill_rates) <- app_combos
+print(am_fill_rates)
+print(pm_fill_rates)
+```
+
+No-show rates morning(am) shift and afternoon(pm) shift
+```{r}
+no_show_rate_func_am <-function(type){
+  return(sum(doc_schedule$supp_block == type & doc_schedule$appt_block != 'UNUSED'& doc_schedule$seen == 0 & strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M"))/sum(doc_schedule$appt_block != 'UNUSED' & doc_schedule$supp_block == type & strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M")) )
+}
+no_show_rate_func_pm <-function(type){
+  return(sum(doc_schedule$supp_block == type & doc_schedule$appt_block != 'UNUSED' & doc_schedule$seen == 0 &strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M"))/sum(doc_schedule$appt_block != 'UNUSED' & doc_schedule$supp_block == type & strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M")) )
+}
+
+pm_no_show_rates <- sapply(app_combos, no_show_rate_func_pm)
+names(pm_no_show_rates) <- app_combos
+
+am_no_show_rates <- sapply(app_combos, no_show_rate_func_am)
+names(am_no_show_rates) <- app_combos
+print(am_no_show_rates)
+print(pm_no_show_rates)
+```
+
+No-show rates morning(am) shift and afternoon(pm) shift by day of the week
+```{r}
+no_show_rate_func_am_w <-function(type, i =4){
+  return(sum(dayoftheweek[as.character(doc_schedule$date)]  == workdays[i] &doc_schedule$supp_block == type & doc_schedule$appt_block != 'UNUSED'& doc_schedule$seen == 0 & strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M"))/sum(dayoftheweek[as.character(doc_schedule$date)]  == workdays[i] & doc_schedule$appt_block != 'UNUSED' & doc_schedule$supp_block == type & strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M")) )
+}
+no_show_rate_func_pm_w <-function(type, i =4){
+   return(sum(dayoftheweek[as.character(doc_schedule$date)]  == workdays[i] &doc_schedule$supp_block == type & doc_schedule$appt_block != 'UNUSED'& doc_schedule$seen == 0 & strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M"))/sum(dayoftheweek[as.character(doc_schedule$date)]  == workdays[i] & doc_schedule$appt_block != 'UNUSED' & doc_schedule$supp_block == type & strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M")) )
+}
+am_no_show_rates_mon <- sapply(app_combos, no_show_rate_func_am_w)
+names(am_no_show_rates_mon) <- app_combos
+pm_no_show_rates_mon <- sapply(app_combos, no_show_rate_func_pm_w)
+names(pm_no_show_rates_mon) <- app_combos
+
+am_no_show_rates_tue <- sapply(app_combos, no_show_rate_func_am_w)
+names(am_no_show_rates_tue) <- app_combos
+pm_no_show_rates_tue <- sapply(app_combos, no_show_rate_func_pm_w)
+names(pm_no_show_rates_tue) <- app_combos
+
+am_no_show_rates_wed <- sapply(app_combos, no_show_rate_func_am_w)
+names(am_no_show_rates_wed) <- app_combos
+pm_no_show_rates_wed <- sapply(app_combos, no_show_rate_func_pm_w)
+names(pm_no_show_rates_wed) <- app_combos
+
+am_no_show_rates_thu <- sapply(app_combos, no_show_rate_func_am_w)
+names(am_no_show_rates_thu) <- app_combos
+pm_no_show_rates_thu <- sapply(app_combos, no_show_rate_func_pm_w)
+names(pm_no_show_rates_thu) <- app_combos
+
+am_no_show_rates_fri <- sapply(app_combos, no_show_rate_func_am_w)
+names(am_no_show_rates_fri) <- app_combos
+pm_no_show_rates_fri <- sapply(app_combos, no_show_rate_func_pm_w)
+names(pm_no_show_rates_fri) <- app_combos
+```
+When two appt types can be booked for a slot, which is more likely to be booked(am/pm)
+```{r}
+more_likely_func <-function(type){
+    app_type1 <- sapply(strsplit(as.character(type), "/"), "[", 1)
+    app_type2 <- sapply(strsplit(as.character(type), "/"), "[", 2)
+    if(grepl("SD", type)){
+      app_type1 <- sapply(strsplit(app_type1, " SD"), "[", 1)
+      app_type2 <- sapply(strsplit(app_type2, " SD"), "[", 1)
+      if(app_type2 == "VIDEO"){
+        app_type2 <- "VIDEO VISIT"
+      }
+    }
+    total <- sum(doc_schedule$appt_block != 'UNUSED' & doc_schedule$supp_block == type)
+    type1 <- sum(doc_schedule$appt_block == app_type1 & doc_schedule$supp_block == type)
+    type2 <- sum(doc_schedule$appt_block == app_type2 & doc_schedule$supp_block == type)
+    return(c(type1/total, type2/total))
+}
+more_likely_func_am <-function(type){
+    app_type1 <- sapply(strsplit(as.character(type), "/"), "[", 1)
+    app_type2 <- sapply(strsplit(as.character(type), "/"), "[", 2)
+    if(grepl("SD", type)){
+      app_type1 <- sapply(strsplit(app_type1, " SD"), "[", 1)
+      app_type2 <- sapply(strsplit(app_type2, " SD"), "[", 1)
+      if(app_type2 == "VIDEO"){
+        app_type2 <- "VIDEO VISIT"
+      }
+    }
+    total <- sum(doc_schedule$appt_block != 'UNUSED' & doc_schedule$supp_block == type & strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M"))
+    type1 <- sum(doc_schedule$appt_block == app_type1 & doc_schedule$supp_block == type & strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M"))
+    type2 <- sum(doc_schedule$appt_block == app_type2 & doc_schedule$supp_block == type&strptime(doc_schedule$hm, format = "%H:%M") < strptime("12:30", format = "%H:%M"))
+    return(c(type1/total, type2/total))
+}
+more_likely_func_pm <-function(type){
+    app_type1 <- sapply(strsplit(as.character(type), "/"), "[", 1)
+    app_type2 <- sapply(strsplit(as.character(type), "/"), "[", 2)
+    if(grepl("SD", type)){
+      app_type1 <- sapply(strsplit(app_type1, " SD"), "[", 1)
+      app_type2 <- sapply(strsplit(app_type2, " SD"), "[", 1)
+      if(app_type2 == "VIDEO"){
+        app_type2 <- "VIDEO VISIT"
+      }
+    }
+    total <- sum(doc_schedule$appt_block != 'UNUSED' & doc_schedule$supp_block == type &strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M"))
+    type1 <- sum(doc_schedule$appt_block == app_type1 & doc_schedule$supp_block == type&strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M"))
+    type2 <- sum(doc_schedule$appt_block == app_type2 & doc_schedule$supp_block == type&strptime(doc_schedule$hm, format = "%H:%M") > strptime("12:30", format = "%H:%M"))
+    return(c(type1/total, type2/total))
+}
+print(app_combos[grepl("/", app_combos) & app_combos != "PCP/OVBK PCP"])
+more_likely <- sapply(app_combos[grepl("/", app_combos) & app_combos != "PCP/OVBK PCP"], more_likely_func)
+print(more_likely)
+more_likely_am <- sapply(app_combos[grepl("/", app_combos) & app_combos != "PCP/OVBK PCP"], more_likely_func_am)
+print(more_likely_am)
+more_likely_pm <- sapply(app_combos[grepl("/", app_combos) & app_combos != "PCP/OVBK PCP"], more_likely_func_pm)
+print(more_likely_pm)
+```
